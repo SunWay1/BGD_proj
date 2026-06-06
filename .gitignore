@@ -1,0 +1,7 @@
+﻿.venv/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.db
+data/generated/
+.pytest_cache/
