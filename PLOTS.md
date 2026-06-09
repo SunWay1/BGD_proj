@@ -147,3 +147,65 @@ Słupki pokazują średni całkowity czas dla każdej metody detekcji (z paskami
 Pokazuje jaki procent całkowitego czasu stanowi haszowanie dla każdej metody. Dla metody „tylko timestamp" wynosi 0%.
 
 **Jak czytać:** jeśli haszowanie stanowi duży procent (np. 60–80%), dokumenty są duże i przejście na metodę timestampową znacząco przyspieszy działanie.
+
+## Porównanie in-memory vs system plików
+
+Generowane przez dodatkowe wykresy porównawcze. Pokazują różnice między bazą działającą wyłącznie w pamięci RAM a bazą zapisywaną na dysku.
+
+Porównywane są dwa odpowiadające sobie tryby:
+
+- **Pełne przeładowanie (in-memory)** <-> **Pełne przeładowanie (system plików)**
+- **Inkrementalny z usuwaniem (in-memory)** <-> **Inkrementalny z usuwaniem (system plików)**
+
+Celem jest określenie kosztu operacji I/O oraz wpływu zapisu na dysk na całkowity czas przetwarzania.
+
+---
+
+### `in_memory_vs_filesystem_time.png`
+
+Wykres słupkowy porównujący średni całkowity czas wykonania dla wersji działającej wyłącznie w pamięci RAM oraz wersji korzystającej z pliku bazy danych.
+
+**Jak czytać:** różnica wysokości słupków pokazuje rzeczywisty koszt operacji dyskowych. Jeżeli słupki są zbliżone, oznacza to, że większość czasu pochłania logika aplikacyjna lub haszowanie, a nie zapis do pliku.
+
+---
+
+### `filesystem_overhead.png`
+
+Pokazuje procentowy narzut wynikający z użycia systemu plików względem wariantu in-memory.
+
+Wartość liczona jest według wzoru:
+
+```text
+(file_time / memory_time - 1) × 100%
+```
+
+**Jak czytać:** wartość 0% oznacza brak różnicy. Wartość 20% oznacza, że wersja wykorzystująca plik działa o 20% wolniej od wersji działającej wyłącznie w pamięci.
+
+---
+
+### `filesystem_breakdown.png`
+
+Skumulowany wykres słupkowy przedstawiający strukturę czasu wykonania dla poszczególnych wariantów:
+
+* **Haszowanie** — obliczanie sum kontrolnych SHA-256
+* **Zapis/Odczyt** — operacje bazodanowe wykonywane podczas ładowania danych
+
+Pokazywane są jednocześnie:
+
+* pełne przeładowanie (RAM)
+* pełne przeładowanie (plik)
+* inkrementalny z usuwaniem (RAM)
+* inkrementalny z usuwaniem (plik)
+
+**Jak czytać:** jeżeli wysokość części odpowiadającej zapisowi/odczytowi znacząco rośnie dla wariantu plikowego, oznacza to, że głównym źródłem spowolnienia są operacje I/O. Jeżeli różnica występuje głównie w części haszującej, ograniczeniem staje się przetwarzanie danych, a nie zapis na dysk.
+
+---
+
+### (Opcjonalnie) `db_size_vs_runtime.png`
+
+Pokazuje zależność między rozmiarem pliku bazy danych a czasem wykonania operacji.
+
+Oś X przedstawia rozmiar bazy danych na dysku, a oś Y całkowity czas wykonania benchmarku.
+
+**Jak czytać:** rosnący trend oznacza, że wraz ze wzrostem rozmiaru bazy zwiększa się koszt operacji dyskowych. Wykres pozwala ocenić, jak silnie wydajność zależy od wielkości przechowywanych danych i czy dalsze skalowanie będzie ograniczane przez I/O.
+

@@ -18,7 +18,7 @@ from .loaders import (
     full_reload_file,
     incremental_load_with_deletes_file
 )
-from .plotting import generate_detection_plots, generate_plots, generate_threshold_plots
+from .plotting import generate_detection_plots, generate_plots, generate_threshold_plots, generate_storage_plots
 
 
 @dataclass(frozen=True)
@@ -524,7 +524,7 @@ def run_storage_comparison(config: StorageConfig) -> List[Dict[str, object]]:
                             conn=results_conn,
                             db_path=None,           # in-memory → db_size_bytes = 0
                             result=result_fr_mem,
-                            scenario="full_reload",
+                            scenario="full_reload_in_memory",
                             dataset_size=size,
                             text_variant=config.variant,
                             batch_size=batch_size,
@@ -548,7 +548,7 @@ def run_storage_comparison(config: StorageConfig) -> List[Dict[str, object]]:
                             conn=results_conn,
                             db_path=config.file_db_path,
                             result=result_fr_file,
-                            scenario="full_reload",
+                            scenario="full_reload_files",
                             dataset_size=size,
                             text_variant=config.variant,
                             batch_size=batch_size,
@@ -583,7 +583,7 @@ def run_storage_comparison(config: StorageConfig) -> List[Dict[str, object]]:
                             conn=results_conn,
                             db_path=None,
                             result=result_del_mem,
-                            scenario="incremental_with_deletes",
+                            scenario="incremental_with_deletes_in_memory",
                             dataset_size=size,
                             text_variant=config.variant,
                             batch_size=batch_size,
@@ -611,7 +611,7 @@ def run_storage_comparison(config: StorageConfig) -> List[Dict[str, object]]:
                             conn=results_conn,
                             db_path=config.file_db_path,
                             result=result_del_file,
-                            scenario="incremental_with_deletes",
+                            scenario="incremental_with_deletes_files",
                             dataset_size=size,
                             text_variant=config.variant,
                             batch_size=batch_size,
@@ -628,7 +628,7 @@ def run_storage_comparison(config: StorageConfig) -> List[Dict[str, object]]:
         _progress(f"[storage] Zapisano CSV: {config.results_csv}")
         if config.create_plots:
             _progress("[storage] Generowanie wykresów...")
-            generate_plots(rows, config.plots_dir)
+            generate_storage_plots(rows, config.plots_dir)
             _progress(f"[storage] Wykresy zapisane w: {config.plots_dir}")
         return rows
     finally:

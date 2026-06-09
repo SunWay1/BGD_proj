@@ -61,6 +61,16 @@ Porównuje trzy sposoby wykrywania zmian:
 
 Wyniki: `results/detection_results.csv`.
 
+### 4. Porównanie bazy in-memory vs na systemie plikowym
+
+Porównuje algorytmy:
+- full-reload na bazie in-memory
+- full-reload na bazie opartej o system plikowy
+- inkrementalny z usuwaniem na bazie in-memory
+- inkrementalny z usuwaniem na systemie plikowym
+
+Wyniki: `results/storage_results.csv`.
+
 ---
 
 ## Uruchamianie

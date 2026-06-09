@@ -18,6 +18,13 @@ SCENARIO_LABELS: Dict[str, str] = {
     "incremental_with_deletes":     "Inkrementalny: z usuwaniem",
 }
 
+STORAGE_SCENARIO_LABELS: Dict[str, str] = {
+    "full_reload_in_memory":                  "Pełne przeładowanie in-memory",
+    "full_reload_files":                      "Pełne przeładowanie na plikach",
+    "incremental_with_deletes_in_memory":     "Inkrementalny: z usuwaniem in-memory",
+    "incremental_with_deletes_files":         "Inkrementalny: z usuwaniem na plikach",
+}
+
 VARIANT_LABELS: Dict[str, str] = {
     "short":  "krótki (~135 B)",
     "medium": "średni (~1 300 B)",
@@ -744,3 +751,213 @@ def generate_detection_plots(rows: List[Dict[str, object]], plots_dir: Path) -> 
     plt.title("Udział czasu haszowania wg metody detekcji")
     plt.ylim(0, 110)
     _finish(plt, plots_dir / "metody_detekcji_haszowanie.png", legend=False)
+
+
+# ---------------------------------------------------------------------------
+# Wykresy porównania in-memory i systemu plikowego
+# ---------------------------------------------------------------------------
+
+def generate_storage_plots(rows: List[Dict[str, object]], plots_dir: Path) -> None:
+    if not rows:
+        return
+    plt, formatter = _require_matplotlib()
+    _style(plt)
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    for variant, variant_rows in _group(rows, "text_variant").items():
+        _plot_memory_vs_filesystem_time(plt, formatter, variant, variant_rows, plots_dir)
+        _plot_memory_vs_filesystem_overhead(plt, formatter, variant, variant_rows, plots_dir)
+        _plot_memory_vs_filesystem_breakdown(plt, formatter, variant, variant_rows, plots_dir)
+
+
+def _plot_memory_vs_filesystem_time(
+    plt, formatter, variant: str, rows: List[Dict], plots_dir: Path
+) -> None:
+    """Porównanie czasu całkowitego: pamięć RAM vs system plików."""
+
+    pairs = [
+        ("full_reload", "full_reload_file", "Pełne przeładowanie"),
+        (
+            "incremental_with_deletes",
+            "incremental_with_deletes_file",
+            "Inkrementalny z usuwaniem",
+        ),
+    ]
+
+    labels = []
+    mem_values = []
+    file_values = []
+
+    for mem_mode, file_mode, label in pairs:
+        mem_rows = [r for r in rows if r["mode"] == mem_mode]
+        file_rows = [r for r in rows if r["mode"] == file_mode]
+
+        if not mem_rows or not file_rows:
+            continue
+
+        labels.append(label)
+        mem_values.append(_mean([float(r["total_time_sec"]) for r in mem_rows]))
+        file_values.append(_mean([float(r["total_time_sec"]) for r in file_rows]))
+
+    if not labels:
+        return
+
+    x = range(len(labels))
+    width = 0.38
+
+    plt.figure(figsize=(10, 6))
+
+    plt.bar(
+        [i - width / 2 for i in x],
+        mem_values,
+        width,
+        label="In-memory",
+    )
+
+    plt.bar(
+        [i + width / 2 for i in x],
+        file_values,
+        width,
+        label="System plików",
+    )
+
+    plt.xticks(list(x), labels)
+    plt.ylabel("Średni czas całkowity [s]")
+    plt.title(
+        f"In-memory vs system plików - {_variant_label(variant)}"
+    )
+
+    _finish(
+        plt,
+        plots_dir / f"in_memory_vs_filesystem_time_{variant}.png",
+    )
+
+
+def _plot_memory_vs_filesystem_overhead(
+    plt, formatter, variant: str, rows: List[Dict], plots_dir: Path
+) -> None:
+    """Narzut systemu plików względem pamięci RAM."""
+
+    pairs = [
+        ("full_reload", "full_reload_file"),
+        ("incremental_with_deletes", "incremental_with_deletes_file"),
+    ]
+
+    labels = []
+    overheads = []
+
+    for mem_mode, file_mode in pairs:
+        mem_rows = [r for r in rows if r["mode"] == mem_mode]
+        file_rows = [r for r in rows if r["mode"] == file_mode]
+
+        if not mem_rows or not file_rows:
+            continue
+
+        mem_time = _mean(
+            [float(r["total_time_sec"]) for r in mem_rows]
+        )
+
+        file_time = _mean(
+            [float(r["total_time_sec"]) for r in file_rows]
+        )
+
+        overhead = ((file_time / mem_time) - 1.0) * 100
+
+        labels.append(
+            STORAGE_SCENARIO_LABELS.get(
+                mem_rows[0]["scenario"],
+                str(mem_rows[0]["scenario"]),
+            )
+        )
+
+        overheads.append(overhead)
+
+    if not labels:
+        return
+
+    plt.figure(figsize=(10, 6))
+
+    bars = plt.bar(labels, overheads)
+
+    plt.bar_label(
+        bars,
+        labels=[f"{v:.1f}%" for v in overheads],
+        padding=3,
+    )
+
+    plt.ylabel("Narzut [%]")
+    plt.title(
+        f"Narzut systemu plików względem pamięci RAM – {_variant_label(variant)}"
+    )
+
+    _finish(
+        plt,
+        plots_dir / f"filesystem_overhead_{variant}.png",
+        legend=False,
+    )
+
+
+def _plot_memory_vs_filesystem_breakdown(
+    plt, formatter, variant: str, rows: List[Dict], plots_dir: Path
+) -> None:
+    """Porównanie haszowania i zapisu dla RAM oraz systemu plików."""
+
+    modes = [
+        "full_reload",
+        "full_reload_file",
+        "incremental_with_deletes",
+        "incremental_with_deletes_file",
+    ]
+
+    labels = []
+    hashing = []
+    loading = []
+
+    for mode in modes:
+        mode_rows = [r for r in rows if r["mode"] == mode]
+
+        if not mode_rows:
+            continue
+
+        labels.append(mode)
+
+        hashing.append(
+            _mean(
+                [float(r["hashing_time_sec"]) for r in mode_rows]
+            )
+        )
+
+        loading.append(
+            _mean(
+                [float(r["load_time_sec"]) for r in mode_rows]
+            )
+        )
+
+    x = range(len(labels))
+
+    plt.figure(figsize=(11, 6))
+
+    plt.bar(
+        x,
+        hashing,
+        label="Haszowanie",
+    )
+
+    plt.bar(
+        x,
+        loading,
+        bottom=hashing,
+        label="Zapis / odczyt",
+    )
+
+    plt.xticks(x, labels, rotation=20)
+
+    plt.ylabel("Czas [s]")
+
+    plt.title(
+        f"Struktura czasu: RAM vs system plików – {_variant_label(variant)}"
+    )
+
+    _finish(
+        plt,
+        plots_dir / f"filesystem_breakdown_{variant}.png",
+    )
