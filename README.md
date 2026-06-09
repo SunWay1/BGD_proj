@@ -11,17 +11,33 @@ Analiza mierzy czas, liczbę operacji na bazie i zużycie RAM dla różnych rozm
 
 ## Instalacja
 
-Wymagany Python 3.11+. Projekt nie ma obowiązkowych zewnętrznych zależności — SQLite jest wbudowany w Pythona. Matplotlib jest potrzebny tylko do generowania wykresów.
+Wymagany Python 3.11+. Projekt nie ma obowiązkowych zewnętrznych zależności dla ścieżki SQLite — SQLite jest wbudowany w Pythona. Matplotlib jest potrzebny tylko do generowania wykresów.
 
 ```bash
 pip install matplotlib
 ```
 
-Aby zainstalować projekt jako paczkę (opcjonalnie, umożliwia polecenie `reload-benchmark` w terminalu):
+Benchmark PostgreSQL wymaga dodatkowo sterownika.
 
 ```bash
-pip install -e ".[plots]"
+pip install -e ".[plots,postgres]"
 ```
+
+Jeśli nie masz lokalnie zainstalowanego PostgreSQL, najprostszy setup developerski to Docker Compose z repozytorium:
+
+```bash
+docker compose up -d postgres
+```
+
+Domyślna konfiguracja kontenera:
+
+- host: `localhost`
+- port: `5432`
+- baza: `reload_benchmark`
+- użytkownik: `postgres`
+- hasło: `postgres`
+
+Sterownik Pythona nie instaluje samego serwera PostgreSQL. `pip install -e ".[plots,postgres]"` instaluje tylko klienta `psycopg` oraz zależności do wykresów.
 
 ---
 
@@ -93,6 +109,8 @@ Każdy etap można uruchomić osobno z pełną kontrolą nad parametrami:
 
 ```bash
 reload-benchmark benchmark [opcje]
+reload-benchmark benchmark-postgres [opcje]
+reload-benchmark benchmark-compare [opcje]
 reload-benchmark threshold [opcje]
 reload-benchmark detection [opcje]
 reload-benchmark generate-data [opcje]
@@ -156,6 +174,97 @@ reload-benchmark threshold --size 100000 --variants short long --change-ratios 0
 
 ---
 
+### `benchmark-postgres` — minimalne porównanie z PostgreSQL
+
+To osobna, celowo mało inwazyjna ścieżka. Obsługuje sensowny podzbiór scenariuszy:
+
+- `full_reload`
+- `incremental_no_changes`
+- `incremental_new_only`
+- `incremental_new_and_changed`
+- `incremental_high_change`
+
+Wyniki mają ten sam układ kolumn co benchmark SQLite i dodatkowo zawierają `backend`, więc można je łatwo zestawić po połączeniu CSV.
+
+| Flaga | Domyślnie | Opis |
+| --- | --- | --- |
+| `--dsn` | `RELOAD_BENCHMARK_POSTGRES_DSN` lub lokalny fallback | DSN do PostgreSQL, np. `postgresql://user:pass@localhost:5432/dbname` |
+| `--csv` | `results/benchmark_postgres_results.csv` | Ścieżka do pliku CSV z wynikami |
+| `--sizes` | `10000 50000 100000` | Rozmiary zbiorów danych |
+| `--variants` | `short long` | Warianty tekstu |
+| `--batch-sizes` | `5000 10000` | Rozmiary partii do porównania |
+| `--batch-size` | — | Pojedynczy rozmiar partii |
+| `--n-runs` | `3` | Liczba powtórzeń |
+| `--new-ratio` | `0.10` | Odsetek nowych rekordów |
+| `--change-ratio` | `0.10` | Odsetek zmienionych rekordów |
+| `--high-change-ratio` | `0.50` | Odsetek zmian w scenariuszu „duże zmiany" |
+
+Przykład:
+
+```bash
+reload-benchmark benchmark-postgres --sizes 10000 --variants short --batch-size 5000 --n-runs 1
+```
+
+Przed pierwszym uruchomieniem lokalnego benchmarku PostgreSQL uruchom kontener:
+
+```bash
+docker compose up -d postgres
+```
+
+Benchmark używa własnego schematu `reload_benchmark` w podanej bazie i czyści tabelę `documents` między przebiegami.
+
+---
+
+### `benchmark-compare` — bezpośrednie porównanie SQLite vs PostgreSQL
+
+Uruchamia oba benchmarki dla tych samych parametrów i zapisuje jawne porównanie wyników dla wspólnych scenariuszy:
+
+- `full_reload`
+- `incremental_no_changes`
+- `incremental_new_only`
+- `incremental_new_and_changed`
+- `incremental_high_change`
+
+Polecenie zapisuje trzy pliki:
+
+- surowe wyniki SQLite,
+- surowe wyniki PostgreSQL,
+- wspólny CSV porównawczy z kolumnami obok siebie, np. `sqlite_total_time_sec`, `postgres_total_time_sec`, `postgres_to_sqlite_time_ratio`.
+
+Jeśli nie użyjesz `--no-plots`, polecenie generuje też wykresy porównawcze `total_time_sec` dla wspólnych scenariuszy.
+
+| Flaga | Domyślnie | Opis |
+| --- | --- | --- |
+| `--dsn` | `RELOAD_BENCHMARK_POSTGRES_DSN` lub lokalny fallback | DSN do PostgreSQL |
+| `--sqlite-db` | `results/benchmark_compare.sqlite` | Plik bazy SQLite używany przez benchmark |
+| `--sqlite-csv` | `results/benchmark_sqlite_results.csv` | Surowe wyniki SQLite |
+| `--postgres-csv` | `results/benchmark_postgres_results.csv` | Surowe wyniki PostgreSQL |
+| `--compare-csv` | `results/benchmark_backend_comparison.csv` | Bezpośrednie porównanie SQLite vs PostgreSQL |
+| `--plots-dir` | `results/plots` | Katalog wykresów porównawczych |
+| `--sizes` | `10000 50000 100000` | Rozmiary zbiorów danych |
+| `--variants` | `short long` | Warianty tekstu |
+| `--batch-sizes` | `5000 10000` | Rozmiary partii do porównania |
+| `--batch-size` | — | Pojedynczy rozmiar partii |
+| `--n-runs` | `3` | Liczba powtórzeń |
+| `--new-ratio` | `0.10` | Odsetek nowych rekordów |
+| `--change-ratio` | `0.10` | Odsetek zmienionych rekordów |
+| `--high-change-ratio` | `0.50` | Odsetek zmian w scenariuszu „duże zmiany" |
+| `--no-plots` | — | Pomiń generowanie wykresów porównawczych |
+
+Przykład:
+
+```bash
+reload-benchmark benchmark-compare --sizes 10000 --variants short --batch-size 5000 --n-runs 1
+```
+
+Przed pierwszym uruchomieniem lokalnego porównania backendów uruchom kontener:
+
+```bash
+docker compose up -d postgres
+```
+
+---
+
 ### `detection` — porównanie metod detekcji
 
 | Flaga | Domyślnie | Opis |
@@ -199,18 +308,21 @@ Jeśli masz już pliki CSV z wynikami, możesz wygenerować wykresy bez ponowneg
 python generate_plots.py
 ```
 
-Skrypt czyta `results/benchmark_results.csv`, `results/threshold_results.csv` i `results/detection_results.csv`. Pomija brakujące pliki.
+Skrypt czyta `results/benchmark_results.csv`, `results/threshold_results.csv`, `results/detection_results.csv` i `results/benchmark_backend_comparison.csv`. Pomija brakujące pliki.
 
 ---
 
 ## Struktura projektu
 
 ```text
+├── docker-compose.yml       # opcjonalny lokalny PostgreSQL do benchmarków porównawczych
 ├── run_analysis.py          # główny skrypt uruchamiający całą analizę
 ├── generate_plots.py        # regeneracja wykresów z istniejących CSV
 ├── src/
 │   └── reload_benchmark/
 │       ├── benchmark.py     # logika trzech etapów analizy
+│       ├── backend_comparison.py # bezpośrednie porównanie SQLite vs PostgreSQL
+│       ├── postgres_benchmark.py # osobny, minimalny benchmark PostgreSQL
 │       ├── loaders.py       # implementacje strategii ładowania
 │       ├── data_generator.py# generowanie danych testowych w pamięci
 │       ├── database.py      # połączenie SQLite, schemat, operacje

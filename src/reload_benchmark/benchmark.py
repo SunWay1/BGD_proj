@@ -126,6 +126,7 @@ def _record_run(
 
     row: Dict[str, object] = {
         "run_at": _run_at(),
+        "backend": "sqlite",
         "mode": result.mode,
         "scenario": scenario,
         "dataset_size": dataset_size,
