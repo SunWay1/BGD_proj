@@ -7,9 +7,10 @@ import sqlite3
 import time
 import tracemalloc
 from typing import Iterable, List, Set, Sequence, Tuple
+from pathlib import Path
 
 from .data_generator import RawDocument
-from .database import delete_documents_by_paths, fetch_document_index, fetch_document_paths, reset_documents
+from .database import connect, delete_documents_by_paths, fetch_document_index, fetch_document_paths,init_db, reset_documents
 
 
 @dataclass(frozen=True)
@@ -402,4 +403,83 @@ def incremental_load_with_deletes_batches(
         load_time_sec=load_time,
         total_time_sec=time.perf_counter() - total_start,
         peak_memory_mb=peak_mb,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Warianty plikowe – algorytmy full-reload i Ładowanie inkrementalne z detekcją usunięć,
+# ---------------------------------------------------------------------------
+
+def _open_fresh_file_conn(db_path: Path) -> sqlite3.Connection:
+    """Usuwa istniejący plik bazy (+ WAL/SHM) i zwraca świeże połączenie."""
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(db_path) + suffix)
+        if p.exists():
+            p.unlink()
+    conn = connect(db_path)
+    init_db(conn)
+    return conn
+
+
+def full_reload_file(
+    db_path: Path,
+    document_batches: Iterable[Iterable[RawDocument]],
+) -> LoadResult:
+    """Pełne przeładowanie z zapisem do pliku SQLite."""
+    conn = _open_fresh_file_conn(db_path)
+    try:
+        result = full_reload_batches(conn, document_batches)
+    finally:
+        conn.close()
+
+    return LoadResult(
+        mode="full_reload_file",
+        records_total=result.records_total,
+        records_inserted=result.records_inserted,
+        records_updated=result.records_updated,
+        records_skipped=result.records_skipped,
+        records_deleted=result.records_deleted,
+        db_writes=result.db_writes,
+        hashing_time_sec=result.hashing_time_sec,
+        load_time_sec=result.load_time_sec,
+        total_time_sec=result.total_time_sec,
+        peak_memory_mb=result.peak_memory_mb,
+    )
+
+
+def incremental_load_with_deletes_file(
+    db_path: Path,
+    base_document_batches: Iterable[Iterable[RawDocument]],
+    scenario_document_batches: Iterable[Iterable[RawDocument]],
+    *,
+    detection_method: str = "hash_or_timestamp",
+) -> LoadResult:
+    """Inkrementalne ładowanie z detekcją usunięć, zapis do pliku SQLite."""
+    conn = _open_fresh_file_conn(db_path)
+    try:
+        # Etap 1 - seed: załaduj dane bazowe (czas nie jest mierzony jako część
+        # scenariusza - benchmark.py robi to samo dla wariantu in-memory).
+        full_reload_batches(conn, base_document_batches)
+
+        # Etap 2 - mierzony inkrement z usuwaniem.
+        result = incremental_load_with_deletes_batches(
+            conn,
+            scenario_document_batches,
+            detection_method=detection_method,
+        )
+    finally:
+        conn.close()
+
+    return LoadResult(
+        mode="incremental_with_deletes_file",
+        records_total=result.records_total,
+        records_inserted=result.records_inserted,
+        records_updated=result.records_updated,
+        records_skipped=result.records_skipped,
+        records_deleted=result.records_deleted,
+        db_writes=result.db_writes,
+        hashing_time_sec=result.hashing_time_sec,
+        load_time_sec=result.load_time_sec,
+        total_time_sec=result.total_time_sec,
+        peak_memory_mb=result.peak_memory_mb,
     )

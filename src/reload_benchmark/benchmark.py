@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
+import sqlite3
 
 from .data_generator import iter_document_batches, iter_scenario_batches
 from .database import connect, count_documents, db_size_bytes, init_db, insert_benchmark_run
@@ -14,6 +15,8 @@ from .loaders import (
     incremental_append_only_batches,
     incremental_load_batches,
     incremental_load_with_deletes_batches,
+    full_reload_file,
+    incremental_load_with_deletes_file
 )
 from .plotting import generate_detection_plots, generate_plots, generate_threshold_plots
 
@@ -69,6 +72,8 @@ SCENARIOS = (
     "incremental_high_change",
     "incremental_append_only",
     "incremental_with_deletes",
+    "full_reload_file",
+    "incremental_with_deletes_file",
 )
 
 
@@ -141,7 +146,7 @@ def _record_run(
         "load_time_sec": result.load_time_sec,
         "total_time_sec": result.total_time_sec,
         "peak_memory_mb": result.peak_memory_mb,
-        "db_size_bytes": db_size_bytes(db_path),
+        "db_size_bytes": db_size_bytes(db_path) if db_path is not None else 0,
         "incremental_to_full_ratio": ratio,
         "speedup_vs_full": speedup,
     }
@@ -420,3 +425,211 @@ def run_detection_comparison(config: DetectionConfig) -> List[Dict[str, object]]
         return rows
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Porównanie in-memory vs plik
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class StorageConfig:
+    """Konfiguracja benchmarku porównującego bazę in-memory z bazą plikową.
+
+    Atrybuty:
+        results_db_path:  Plik SQLite przechowujący rekordy benchmark_runs.
+        file_db_path:     Plik SQLite używany przez testowane scenariusze plikowe.
+                          Przy każdym uruchomieniu scenariusza plik jest usuwany
+                          i tworzony od zera (przez `_open_fresh_file_conn`).
+    """
+    results_db_path: Path
+    file_db_path: Path
+    results_csv: Path
+    plots_dir: Path
+    sizes: List[int]
+    variant: str
+    batch_sizes: List[int]
+    delete_ratio: float = 0.05
+    n_runs: int = 1
+    create_plots: bool = True
+
+
+def run_storage_comparison(config: StorageConfig) -> List[Dict[str, object]]:
+    """Porównuje te same algorytmy na bazie in-memory i na pliku SQLite.
+
+    Dla każdej kombinacji (wariant x rozmiar x partia x powtórzenie) uruchamia
+    cztery scenariusze
+
+    Kolumna ``mode`` w CSV jednoznacznie identyfikuje backend, a ``scenario``
+    identyfikuje algorytm - co ułatwia porównanie parami na wykresach.
+
+    Pomiar inkrementu plikowego jest sprawiedliwy wobec odpowiednika in-memory:
+    seed (full reload danych bazowych) nie jest wliczany do czasu inkrementu
+    w żadnym z wariantów.
+
+    Args:
+        config: Konfiguracja benchmarku.
+
+    Returns:
+        Lista słowników z wynikami - jeden wiersz na scenariusz x uruchomienie.
+    """
+    total_combos = (
+        len(config.sizes) * len(config.batch_sizes) * config.n_runs
+    )
+    combo_idx = 0
+    _progress(
+        f"[storage] Start: {total_combos} kombinacji "
+        f"(rozmiary={config.sizes}, partie={config.batch_sizes}, powtórzenia={config.n_runs})"
+    )
+
+    rows: List[Dict[str, object]] = []
+    # Rejestr benchmark_runs ląduje w oddzielnym pliku, żeby nie zakłócać
+    # pomiaru testowanej bazy plikowej.
+    results_conn = _fresh_connection(config.results_db_path)
+
+    try:
+        for size in config.sizes:
+            for batch_size in config.batch_sizes:
+                # Lambdy przechwytują bieżące wartości zmiennych pętli
+                # przez parametry domyślne – unika problemów z domknięciami.
+                def base_batches(v=config.variant, s=size, b=batch_size):
+                    return iter_document_batches(s, v, b)
+
+                def scenario_batches(v=config.variant, s=size, b=batch_size, dr=config.delete_ratio):
+                    return iter_scenario_batches(s, v, b, delete_ratio=dr)
+
+                for run_idx in range(config.n_runs):
+                    combo_idx += 1
+                    _progress(
+                        f"  [{combo_idx}/{total_combos}] wariant={config.variant}, "
+                        f"rozmiar={size:,}, partia={batch_size:,}, "
+                        f"uruchomienie={run_idx + 1}/{config.n_runs}"
+                    )
+
+                    # ── 1. Full reload – in-memory ────────────────────────
+                    # Świeże połączenie :memory: dla każdego uruchomienia,
+                    # żeby poprzedni stan nie wpływał na pomiar.
+                    mem_conn = sqlite3.connect(":memory:")
+                    mem_conn.row_factory = sqlite3.Row
+                    mem_conn.execute("PRAGMA journal_mode = WAL")
+                    mem_conn.execute("PRAGMA synchronous = NORMAL")
+                    init_db(mem_conn)
+                    try:
+                        result_fr_mem = full_reload_batches(mem_conn, base_batches())
+                    finally:
+                        mem_conn.close()
+
+                    full_reload_time_mem = result_fr_mem.total_time_sec
+                    rows.append(
+                        _record_run(
+                            conn=results_conn,
+                            db_path=None,           # in-memory → db_size_bytes = 0
+                            result=result_fr_mem,
+                            scenario="full_reload",
+                            dataset_size=size,
+                            text_variant=config.variant,
+                            batch_size=batch_size,
+                            change_ratio=None,
+                            delete_ratio=0.0,
+                            change_distribution="n/a",
+                            detection_method="n/a",
+                            run_index=run_idx,
+                            full_reload_time=None,
+                        )
+                    )
+
+                    # ── 2. Full reload – plik ─────────────────────────────
+                    # full_reload_file otwiera i zamyka połączenie wewnętrznie,
+                    # więc czas close() (fsync WAL) jest wliczony w pomiar.
+                    result_fr_file = full_reload_file(config.file_db_path, base_batches())
+
+                    full_reload_time_file = result_fr_file.total_time_sec
+                    rows.append(
+                        _record_run(
+                            conn=results_conn,
+                            db_path=config.file_db_path,
+                            result=result_fr_file,
+                            scenario="full_reload",
+                            dataset_size=size,
+                            text_variant=config.variant,
+                            batch_size=batch_size,
+                            change_ratio=None,
+                            delete_ratio=0.0,
+                            change_distribution="n/a",
+                            detection_method="n/a",
+                            run_index=run_idx,
+                            full_reload_time=None,
+                        )
+                    )
+
+                    # ── 3. Incremental with deletes – in-memory ───────────
+                    # Seed nie jest mierzony: pełny reload na :memory: przed
+                    # inkrementem (identycznie jak w run_benchmark).
+                    mem_conn = sqlite3.connect(":memory:")
+                    mem_conn.row_factory = sqlite3.Row
+                    mem_conn.execute("PRAGMA journal_mode = WAL")
+                    mem_conn.execute("PRAGMA synchronous = NORMAL")
+                    init_db(mem_conn)
+                    try:
+                        full_reload_batches(mem_conn, base_batches())
+                        result_del_mem = incremental_load_with_deletes_batches(
+                            mem_conn,
+                            scenario_batches(),
+                        )
+                    finally:
+                        mem_conn.close()
+
+                    rows.append(
+                        _record_run(
+                            conn=results_conn,
+                            db_path=None,
+                            result=result_del_mem,
+                            scenario="incremental_with_deletes",
+                            dataset_size=size,
+                            text_variant=config.variant,
+                            batch_size=batch_size,
+                            change_ratio=None,
+                            delete_ratio=config.delete_ratio,
+                            change_distribution="n/a",
+                            detection_method="hash_or_timestamp",
+                            run_index=run_idx,
+                            full_reload_time=full_reload_time_mem,
+                        )
+                    )
+
+                    # ── 4. Incremental with deletes – plik ────────────────
+                    # Seed jest realizowany wewnątrz incremental_load_with_deletes_file
+                    # na tym samym połączeniu plikowym (WAL nie jest opróżniany między
+                    # etapami – symuluje warunki rzeczywistego procesu ETL).
+                    result_del_file = incremental_load_with_deletes_file(
+                        config.file_db_path,
+                        base_batches(),
+                        scenario_batches(),
+                    )
+
+                    rows.append(
+                        _record_run(
+                            conn=results_conn,
+                            db_path=config.file_db_path,
+                            result=result_del_file,
+                            scenario="incremental_with_deletes",
+                            dataset_size=size,
+                            text_variant=config.variant,
+                            batch_size=batch_size,
+                            change_ratio=None,
+                            delete_ratio=config.delete_ratio,
+                            change_distribution="n/a",
+                            detection_method="hash_or_timestamp",
+                            run_index=run_idx,
+                            full_reload_time=full_reload_time_file,
+                        )
+                    )
+
+        _write_csv(config.results_csv, rows)
+        _progress(f"[storage] Zapisano CSV: {config.results_csv}")
+        if config.create_plots:
+            _progress("[storage] Generowanie wykresów...")
+            generate_plots(rows, config.plots_dir)
+            _progress(f"[storage] Wykresy zapisane w: {config.plots_dir}")
+        return rows
+    finally:
+        results_conn.close()

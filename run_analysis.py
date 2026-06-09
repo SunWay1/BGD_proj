@@ -11,8 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from reload_benchmark.benchmark import (
-    BenchmarkConfig, ThresholdConfig, DetectionConfig,
-    run_benchmark, run_threshold, run_detection_comparison,
+    BenchmarkConfig, ThresholdConfig, DetectionConfig, StorageConfig,
+    run_benchmark, run_threshold, run_detection_comparison, run_storage_comparison
 )
 
 ROOT = Path(__file__).parent
@@ -43,7 +43,7 @@ if QUICK:
         create_plots=True,
     )
 else:
-    print("BENCHMARK: Full reload vs Inkrementalny – 7 scenariuszy")
+    print("BENCHMARK: Full reload vs Inkrementalny - 7 scenariuszy")
     print("  rozmiary: 10 000 / 50 000 / 100 000, warianty: short + long, 2 partii, 3 uruchomienia")
     cfg_bench = BenchmarkConfig(
         db_path=RESULTS / "benchmark.sqlite",
@@ -66,7 +66,7 @@ print(f"  >> Zakończono {len(rows)} uruchomień w {time.perf_counter()-t0:.1f}s
 # ---------------------------------------------------------------------------
 print("=" * 65)
 if QUICK:
-    print("THRESHOLD (szybki): 2 warianty × 8 punktów × 2 uruchomienia")
+    print("THRESHOLD (szybki): 2 warianty x 8 punktów x 2 uruchomienia")
     cfg_thr = ThresholdConfig(
         db_path=RESULTS / "threshold.sqlite",
         results_csv=RESULTS / "threshold_results.csv",
@@ -79,7 +79,7 @@ if QUICK:
         create_plots=True,
     )
 else:
-    print("THRESHOLD: Próg opłacalności – 4 warianty tekstu × 16 punktów × 3 uruchomienia")
+    print("THRESHOLD: Próg opłacalności - 4 warianty tekstu x 16 punktów x 3 uruchomienia")
     cfg_thr = ThresholdConfig(
         db_path=RESULTS / "threshold.sqlite",
         results_csv=RESULTS / "threshold_results.csv",
@@ -106,7 +106,7 @@ print(f"  >> Zakończono {len(rows)} pomiarów w {time.perf_counter()-t0:.1f}s\n
 # ---------------------------------------------------------------------------
 print("=" * 65)
 if QUICK:
-    print("DETECTION (szybki): 3 metody × 3 uruchomienia, 5 000 rekordów")
+    print("DETECTION (szybki): 3 metody x 3 uruchomienia, 5 000 rekordów")
     cfg_det = DetectionConfig(
         db_path=RESULTS / "detection.sqlite",
         results_csv=RESULTS / "detection_results.csv",
@@ -120,7 +120,7 @@ if QUICK:
         create_plots=True,
     )
 else:
-    print("DETECTION: Porównanie metod detekcji – 50 000 rekordów × 5 uruchomień")
+    print("DETECTION: Porównanie metod detekcji - 50 000 rekordów x 5 uruchomień")
     cfg_det = DetectionConfig(
         db_path=RESULTS / "detection.sqlite",
         results_csv=RESULTS / "detection_results.csv",
@@ -137,6 +137,45 @@ print("=" * 65)
 
 t0 = time.perf_counter()
 rows = run_detection_comparison(cfg_det)
+print(f"  >> Zakończono {len(rows)} pomiarów w {time.perf_counter()-t0:.1f}s\n")
+
+# ---------------------------------------------------------------------------
+# 4. Porównanie baz in-memory vs na systemie plikowym
+# ---------------------------------------------------------------------------
+
+print("=" * 65)
+if QUICK:
+    print("STORAGE (szybki): 2 metody x 3 uruchomienia, 5 000 rekordów")
+    cfg_store = StorageConfig(
+        results_db_path=RESULTS / "storage.sqlite",
+        file_db_path=RESULTS / "tmp.sqlite",
+        results_csv=RESULTS / "storage_results.csv",
+        plots_dir=PLOTS,
+        sizes=[5_000, 20_000],
+        variant="short",
+        batch_sizes=[2_000],
+        delete_ratio=0.10,
+        n_runs=3,
+        create_plots=True,
+    )
+else:
+    print("STORAGE: Porównanie metod zapisu danych - 50 000 rekordów x 5 uruchomień")
+    cfg_store = StorageConfig(
+        results_db_path=RESULTS / "storage.sqlite",
+        file_db_path=RESULTS / "tmp.sqlite",
+        results_csv=RESULTS / "storage_results.csv",
+        plots_dir=PLOTS,
+        sizes=[10_000, 50_000, 100_000],
+        variant="long",
+        batch_sizes=[5_000, 10_000],
+        delete_ratio=0.10,
+        n_runs=5,
+        create_plots=True,
+    )
+print("=" * 65)
+
+t0 = time.perf_counter()
+rows = run_storage_comparison(cfg_store)
 print(f"  >> Zakończono {len(rows)} pomiarów w {time.perf_counter()-t0:.1f}s\n")
 
 # ---------------------------------------------------------------------------
