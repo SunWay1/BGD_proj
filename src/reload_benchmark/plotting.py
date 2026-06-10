@@ -25,6 +25,16 @@ STORAGE_SCENARIO_LABELS: Dict[str, str] = {
     "incremental_with_deletes_files":         "Inkrementalny: z usuwaniem na plikach",
 }
 
+BACKEND_LABELS: Dict[str, str] = {
+    "sqlite": "SQLite",
+    "postgres": "PostgreSQL",
+}
+
+BACKEND_PALETTE: Dict[str, str] = {
+    "sqlite": "#2563EB",
+    "postgres": "#DC2626",
+}
+
 VARIANT_LABELS: Dict[str, str] = {
     "short":  "krótki (~135 B)",
     "medium": "średni (~1 300 B)",
@@ -166,6 +176,55 @@ def generate_plots(rows: List[Dict[str, object]], plots_dir: Path) -> None:
         _plot_heatmap_speedup(plt, formatter, variant, variant_rows, plots_dir)
         _plot_hashing_fraction(plt, formatter, variant, variant_rows, plots_dir)
         _plot_memory_usage(plt, formatter, variant, variant_rows, plots_dir)
+
+
+def generate_backend_comparison_plots(rows: List[Dict[str, object]], plots_dir: Path) -> None:
+    if not rows:
+        return
+    plt, formatter = _require_matplotlib()
+    _style(plt)
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    for variant, variant_rows in _group(rows, "text_variant").items():
+        _plot_backend_total_time_by_size(plt, formatter, variant, variant_rows, plots_dir)
+
+
+def _plot_backend_total_time_by_size(plt, formatter, variant: str, rows: List[Dict], plots_dir: Path) -> None:
+    for scenario in SCENARIO_ORDER:
+        scenario_rows = [r for r in rows if r["scenario"] == scenario]
+        if not scenario_rows:
+            continue
+
+        plt.figure(figsize=(13, 7))
+        for backend in ("sqlite", "postgres"):
+            total_key = f"{backend}_total_time_sec"
+            per_size: Dict[int, List[float]] = {}
+            for row in scenario_rows:
+                per_size.setdefault(int(row["dataset_size"]), []).append(float(row[total_key]))
+
+            sizes = sorted(per_size)
+            means = [_mean(per_size[s]) for s in sizes]
+            stds = [_std(per_size[s]) for s in sizes]
+            color = BACKEND_PALETTE[backend]
+            label = BACKEND_LABELS[backend]
+            plt.plot(sizes, means, marker="o", color=color, label=label)
+            if sizes and max(stds) > 0:
+                plt.fill_between(
+                    sizes,
+                    [m - s for m, s in zip(means, stds)],
+                    [m + s for m, s in zip(means, stds)],
+                    alpha=0.15,
+                    color=color,
+                )
+
+        ax = plt.gca()
+        ax.xaxis.set_major_formatter(formatter(_format_int))
+        plt.title(
+            f"SQLite vs PostgreSQL – {SCENARIO_LABELS.get(scenario, scenario)} – {_variant_label(variant)}"
+        )
+        plt.xlabel("Liczba rekordów")
+        plt.ylabel("Średni czas całkowity [s]")
+        _finish(plt, plots_dir / f"backend_total_time_{scenario}_{variant}.png")
 
 
 def _plot_total_time_by_size(plt, formatter, variant: str, rows: List[Dict], plots_dir: Path) -> None:

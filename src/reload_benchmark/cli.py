@@ -4,9 +4,15 @@ import argparse
 from pathlib import Path
 from typing import List
 
+from .backend_comparison import BackendComparisonConfig, run_backend_comparison
 from .benchmark import BenchmarkConfig, DetectionConfig, ThresholdConfig
 from .benchmark import run_benchmark, run_detection_comparison, run_threshold
 from .data_generator import write_documents_to_disk
+from .postgres_benchmark import (
+    PostgresBenchmarkConfig,
+    resolve_dsn,
+    run_postgres_benchmark,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +51,65 @@ def build_parser() -> argparse.ArgumentParser:
         help="Liczba powtórzeń każdego scenariusza (do obliczeń statystycznych)",
     )
     benchmark.add_argument("--no-plots", action="store_true")
+
+    postgres = subparsers.add_parser(
+        "benchmark-postgres",
+        help="Uruchom minimalny benchmark PostgreSQL (full reload + incremental load)",
+    )
+    postgres.add_argument("--dsn", type=str, default=None)
+    postgres.add_argument("--csv", type=Path, default=Path("results/benchmark_postgres_results.csv"))
+    postgres.add_argument(
+        "--sizes", type=int, nargs="+", default=[10_000, 50_000, 100_000],
+        help="Rozmiary zbiorów danych",
+    )
+    postgres.add_argument(
+        "--variants", choices=["short", "medium", "long", "xlarge"], nargs="+",
+        default=["short", "long"], help="Warianty długości tekstu",
+    )
+    postgres.add_argument("--batch-size", type=int, default=None)
+    postgres.add_argument(
+        "--batch-sizes", type=int, nargs="+", default=None,
+        help="Lista rozmiarów partii do porównania",
+    )
+    postgres.add_argument("--new-ratio", type=float, default=0.10)
+    postgres.add_argument("--change-ratio", type=float, default=0.10)
+    postgres.add_argument("--high-change-ratio", type=float, default=0.50)
+    postgres.add_argument(
+        "--n-runs", type=int, default=3,
+        help="Liczba powtórzeń każdego scenariusza",
+    )
+
+    compare = subparsers.add_parser(
+        "benchmark-compare",
+        help="Uruchom bezpośrednie porównanie SQLite vs PostgreSQL dla wspólnych scenariuszy",
+    )
+    compare.add_argument("--dsn", type=str, default=None)
+    compare.add_argument("--sqlite-db", type=Path, default=Path("results/benchmark_compare.sqlite"))
+    compare.add_argument("--sqlite-csv", type=Path, default=Path("results/benchmark_sqlite_results.csv"))
+    compare.add_argument("--postgres-csv", type=Path, default=Path("results/benchmark_postgres_results.csv"))
+    compare.add_argument("--compare-csv", type=Path, default=Path("results/benchmark_backend_comparison.csv"))
+    compare.add_argument("--plots-dir", type=Path, default=Path("results/plots"))
+    compare.add_argument(
+        "--sizes", type=int, nargs="+", default=[10_000, 50_000, 100_000],
+        help="Rozmiary zbiorów danych",
+    )
+    compare.add_argument(
+        "--variants", choices=["short", "medium", "long", "xlarge"], nargs="+",
+        default=["short", "long"], help="Warianty długości tekstu",
+    )
+    compare.add_argument("--batch-size", type=int, default=None)
+    compare.add_argument(
+        "--batch-sizes", type=int, nargs="+", default=None,
+        help="Lista rozmiarów partii do porównania",
+    )
+    compare.add_argument("--new-ratio", type=float, default=0.10)
+    compare.add_argument("--change-ratio", type=float, default=0.10)
+    compare.add_argument("--high-change-ratio", type=float, default=0.50)
+    compare.add_argument(
+        "--n-runs", type=int, default=3,
+        help="Liczba powtórzeń każdego scenariusza",
+    )
+    compare.add_argument("--no-plots", action="store_true")
 
     # ------------------------------------------------------------------
     # threshold – analiza progu opłacalności
@@ -183,6 +248,49 @@ def main(argv: List[str] | None = None) -> int:
         rows = run_detection_comparison(config)
         print(f"Zakończono {len(rows)} pomiarów metod detekcji")
         print(f"CSV: {config.results_csv}")
+        if config.create_plots:
+            print(f"Wykresy: {config.plots_dir}")
+        return 0
+
+    if args.command == "benchmark-postgres":
+        config = PostgresBenchmarkConfig(
+            dsn=resolve_dsn(args.dsn),
+            results_csv=args.csv,
+            sizes=args.sizes,
+            variants=args.variants,
+            batch_sizes=_batch_sizes(args),
+            new_ratio=args.new_ratio,
+            change_ratio=args.change_ratio,
+            high_change_ratio=args.high_change_ratio,
+            n_runs=args.n_runs,
+        )
+        rows = run_postgres_benchmark(config)
+        print(f"Zakończono {len(rows)} uruchomień benchmarku PostgreSQL")
+        print(f"CSV: {config.results_csv}")
+        return 0
+
+    if args.command == "benchmark-compare":
+        config = BackendComparisonConfig(
+            sqlite_db_path=args.sqlite_db,
+            sqlite_results_csv=args.sqlite_csv,
+            postgres_results_csv=args.postgres_csv,
+            comparison_csv=args.compare_csv,
+            plots_dir=args.plots_dir,
+            postgres_dsn=resolve_dsn(args.dsn),
+            sizes=args.sizes,
+            variants=args.variants,
+            batch_sizes=_batch_sizes(args),
+            new_ratio=args.new_ratio,
+            change_ratio=args.change_ratio,
+            high_change_ratio=args.high_change_ratio,
+            n_runs=args.n_runs,
+            create_plots=not args.no_plots,
+        )
+        rows = run_backend_comparison(config)
+        print(f"Zakończono {len(rows)} bezpośrednich porównań SQLite vs PostgreSQL")
+        print(f"SQLite CSV: {config.sqlite_results_csv}")
+        print(f"PostgreSQL CSV: {config.postgres_results_csv}")
+        print(f"Porównanie CSV: {config.comparison_csv}")
         if config.create_plots:
             print(f"Wykresy: {config.plots_dir}")
         return 0

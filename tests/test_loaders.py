@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+import os
 import sys
 import tempfile
 import unittest
@@ -8,7 +9,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from reload_benchmark.backend_comparison import build_comparison_rows
 from reload_benchmark.benchmark import BenchmarkConfig, ThresholdConfig, run_benchmark, run_threshold
+from reload_benchmark.cli import build_parser
 from reload_benchmark.data_generator import (
     generate_documents,
     iter_document_batches,
@@ -18,6 +21,7 @@ from reload_benchmark.data_generator import (
 )
 from reload_benchmark.database import connect, count_documents, init_db
 from reload_benchmark.loaders import full_reload, full_reload_batches, incremental_load, incremental_load_batches
+from reload_benchmark.postgres_benchmark import DEFAULT_LOCAL_POSTGRES_DSN, resolve_dsn
 
 
 class LoaderTests(unittest.TestCase):
@@ -125,7 +129,9 @@ class LoaderTests(unittest.TestCase):
         rows = run_benchmark(config)
         self.assertTrue(csv_path.exists())
         self.assertIn("batch_size", rows[0])
+        self.assertIn("backend", rows[0])
         self.assertEqual(rows[0]["batch_size"], 4)
+        self.assertEqual(rows[0]["backend"], "sqlite")
 
     def test_threshold_csv_contains_strategy(self) -> None:
         csv_path = self.root / "results" / "threshold.csv"
@@ -146,6 +152,113 @@ class LoaderTests(unittest.TestCase):
         self.assertIn("incremental_to_full_ratio", rows[0])
         self.assertIn(rows[0]["recommended_strategy"], {"incremental_load", "full_reload"})
 
+    def test_cli_parses_postgres_benchmark_command(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "benchmark-postgres",
+                "--dsn",
+                "postgresql://postgres:postgres@localhost:5432/reload_benchmark",
+                "--sizes",
+                "10",
+                "--variants",
+                "short",
+                "--batch-size",
+                "4",
+                "--n-runs",
+                "1",
+            ]
+        )
+        self.assertEqual(args.command, "benchmark-postgres")
+        self.assertEqual(args.batch_size, 4)
+        self.assertEqual(args.variants, ["short"])
+
+    def test_cli_parses_backend_compare_command(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "benchmark-compare",
+                "--dsn",
+                "postgresql://postgres:postgres@localhost:5432/reload_benchmark",
+                "--sizes",
+                "10",
+                "--variants",
+                "short",
+                "--batch-size",
+                "4",
+                "--n-runs",
+                "1",
+            ]
+        )
+        self.assertEqual(args.command, "benchmark-compare")
+        self.assertEqual(args.batch_size, 4)
+        self.assertEqual(args.variants, ["short"])
+
+    def test_build_comparison_rows_creates_explicit_sqlite_vs_postgres_view(self) -> None:
+        sqlite_rows = [
+            {
+                "scenario": "full_reload",
+                "dataset_size": 10,
+                "text_variant": "short",
+                "batch_size": 4,
+                "change_ratio": None,
+                "run_index": 0,
+                "total_time_sec": 2.0,
+                "load_time_sec": 1.5,
+                "hashing_time_sec": 0.5,
+                "peak_memory_mb": 10.0,
+                "db_size_bytes": 1000,
+                "records_inserted": 10,
+                "records_updated": 0,
+                "records_skipped": 0,
+                "db_writes": 10,
+            }
+        ]
+        postgres_rows = [
+            {
+                "scenario": "full_reload",
+                "dataset_size": 10,
+                "text_variant": "short",
+                "batch_size": 4,
+                "change_ratio": None,
+                "run_index": 0,
+                "total_time_sec": 1.0,
+                "load_time_sec": 0.8,
+                "hashing_time_sec": 0.2,
+                "peak_memory_mb": 12.0,
+                "db_size_bytes": 2000,
+                "records_inserted": 10,
+                "records_updated": 0,
+                "records_skipped": 0,
+                "db_writes": 10,
+            }
+        ]
+        rows = build_comparison_rows(sqlite_rows, postgres_rows)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["faster_backend"], "postgres")
+        self.assertEqual(rows[0]["sqlite_total_time_sec"], 2.0)
+        self.assertEqual(rows[0]["postgres_total_time_sec"], 1.0)
+        self.assertEqual(rows[0]["postgres_to_sqlite_time_ratio"], 0.5)
+
+    def test_resolve_dsn_returns_local_fallback_when_env_missing(self) -> None:
+        previous = os.environ.pop("RELOAD_BENCHMARK_POSTGRES_DSN", None)
+        try:
+            self.assertEqual(resolve_dsn(None), DEFAULT_LOCAL_POSTGRES_DSN)
+        finally:
+            if previous is not None:
+                os.environ["RELOAD_BENCHMARK_POSTGRES_DSN"] = previous
+
+    def test_resolve_dsn_prefers_explicit_argument_over_env(self) -> None:
+        previous = os.environ.get("RELOAD_BENCHMARK_POSTGRES_DSN")
+        os.environ["RELOAD_BENCHMARK_POSTGRES_DSN"] = "postgresql://env-user:env-pass@env-host:5432/env-db"
+        try:
+            resolved = resolve_dsn("postgresql://arg-user:arg-pass@arg-host:5432/arg-db")
+            self.assertEqual(resolved, "postgresql://arg-user:arg-pass@arg-host:5432/arg-db")
+        finally:
+            if previous is None:
+                os.environ.pop("RELOAD_BENCHMARK_POSTGRES_DSN", None)
+            else:
+                os.environ["RELOAD_BENCHMARK_POSTGRES_DSN"] = previous
 
 if __name__ == "__main__":
     unittest.main()

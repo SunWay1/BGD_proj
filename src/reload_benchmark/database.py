@@ -23,6 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents(updated_at);
 CREATE TABLE IF NOT EXISTS benchmark_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_at TEXT NOT NULL,
+    backend TEXT NOT NULL DEFAULT 'sqlite',
     mode TEXT NOT NULL,
     scenario TEXT NOT NULL,
     dataset_size INTEGER NOT NULL,
@@ -61,6 +62,14 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(benchmark_runs)").fetchall()
+    }
+    if "backend" not in columns:
+        conn.execute(
+            "ALTER TABLE benchmark_runs ADD COLUMN backend TEXT NOT NULL DEFAULT 'sqlite'"
+        )
     conn.commit()
 
 
