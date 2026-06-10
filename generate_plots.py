@@ -11,9 +11,10 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from reload_benchmark.plotting import (
     generate_backend_comparison_plots,
-    generate_plots,
-    generate_threshold_plots,
     generate_detection_plots,
+    generate_plots,
+    generate_storage_plots,
+    generate_threshold_plots,
 )
 
 ROOT = Path(__file__).parent
@@ -49,27 +50,36 @@ print("Generowanie wykresów z istniejących plików CSV")
 print(f"Katalog wyników: {RESULTS}")
 print("=" * 60)
 
-bench_rows = _load_csv(RESULTS / "benchmark_results.csv")
+bench_rows = (
+    _load_csv(RESULTS / "benchmark_sqlite_results.csv")
+    or _load_csv(RESULTS / "benchmark_results.csv")
+)
 if bench_rows:
-    print("\n[1/3] Wykresy benchmarku...")
+    print("\n[1/5] Wykresy benchmarku...")
     generate_plots(bench_rows, PLOTS)
     print("  OK")
 
 thr_rows = _load_csv(RESULTS / "threshold_results.csv")
 if thr_rows:
-    print("\n[2/3] Wykresy progu opłacalności...")
+    print("\n[2/5] Wykresy progu opłacalności...")
     generate_threshold_plots(thr_rows, PLOTS)
     print("  OK")
 
 det_rows = _load_csv(RESULTS / "detection_results.csv")
 if det_rows:
-    print("\n[3/3] Wykresy metod detekcji...")
+    print("\n[3/5] Wykresy metod detekcji...")
     generate_detection_plots(det_rows, PLOTS)
+    print("  OK")
+
+store_rows = _load_csv(RESULTS / "storage_results.csv")
+if store_rows:
+    print("\n[4/5] Wykresy porównania in-memory vs system plików...")
+    generate_storage_plots(store_rows, PLOTS)
     print("  OK")
 
 cmp_rows = _load_csv(RESULTS / "benchmark_backend_comparison.csv")
 if cmp_rows:
-    print("\n[4/4] Wykresy porównawcze SQLite vs PostgreSQL...")
+    print("\n[5/5] Wykresy porównawcze SQLite vs PostgreSQL...")
     generate_backend_comparison_plots(cmp_rows, PLOTS)
     print("  OK")
 

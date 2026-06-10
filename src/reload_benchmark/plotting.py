@@ -68,7 +68,7 @@ def _require_matplotlib():
         from matplotlib.ticker import FuncFormatter
     except ImportError as exc:
         raise RuntimeError(
-            "matplotlib jest wymagany do generowania wykresów. Zainstaluj: pip install -r requirements.txt"
+            "matplotlib jest wymagany do generowania wykresów. Zainstaluj: pip install -e \".[plots]\""
         ) from exc
     return plt, FuncFormatter
 
@@ -125,7 +125,9 @@ def _finish(plt, path: Path, *, legend: bool = True, loc: str = "best") -> None:
     ax.grid(True, axis="y", alpha=0.9)
     ax.grid(True, axis="x", alpha=0.25)
     if legend:
-        ax.legend(frameon=True, facecolor="#FFFFFF", edgecolor="#CBD5E1", loc=loc)
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(frameon=True, facecolor="#FFFFFF", edgecolor="#CBD5E1", loc=loc)
     plt.tight_layout()
     plt.savefig(path, bbox_inches="tight")
     plt.close()
@@ -135,7 +137,7 @@ def _std(values: List[float]) -> float:
     if len(values) < 2:
         return 0.0
     mean = sum(values) / len(values)
-    return (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
+    return (sum((v - mean) ** 2 for v in values) / (len(values) - 1)) ** 0.5
 
 
 def _mean(values: List[float]) -> float:
@@ -530,15 +532,17 @@ def _plot_heatmap_speedup(plt, formatter, variant: str, rows: List[Dict], plots_
                 ax.text(bi, si, f"{val:.2f}x", ha="center", va="center", fontsize=10,
                         color=text_color, fontweight="bold")
 
-    if im_last is not None:
-        fig.colorbar(im_last, ax=axes, label="Przyspieszenie vs pełny reload", shrink=0.8)
-
     fig.suptitle(
         f"Heatmapa przyspieszenia – {_variant_label(variant)}\n"
         "Zielony = inkrementalny szybszy, Czerwony = full reload szybszy",
         fontsize=13, fontweight="bold",
     )
-    plt.tight_layout()
+    # tight_layout nie uwzględnia suptitle ani colorbar z ax=list,
+    # więc ręcznie rezerwujemy miejsce: góra na tytuł, prawa strona na colorbar
+    fig.subplots_adjust(top=0.82, right=0.87, wspace=0.35)
+    if im_last is not None:
+        cbar_ax = fig.add_axes([0.90, 0.15, 0.025, 0.55])
+        fig.colorbar(im_last, cax=cbar_ax, label="Przyspieszenie vs pełny reload")
     plt.savefig(plots_dir / f"heatmapa_przyspieszenia_{variant}.png", bbox_inches="tight", dpi=180)
     plt.close()
 
@@ -919,6 +923,8 @@ def _plot_memory_vs_filesystem_overhead(
             [float(r["total_time_sec"]) for r in file_rows]
         )
 
+        if mem_time <= 0:
+            continue
         overhead = ((file_time / mem_time) - 1.0) * 100
 
         labels.append(

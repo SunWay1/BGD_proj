@@ -1,343 +1,248 @@
-# Full Reload vs Incremental Load — Benchmark
+# Full Reload vs Incremental Load -- Benchmark
 
-Projekt porównuje dwie strategie ładowania danych do bazy SQLite:
+Benchmarks two data loading strategies for SQLite and PostgreSQL:
 
-- **Pełne przeładowanie (Full Reload)** — usuwa wszystkie rekordy i wgrywa zbiór od zera
-- **Ładowanie inkrementalne (Incremental Load)** — sprawdza każdy rekord i zapisuje tylko to, co się zmieniło
+- **Full Reload** -- truncate the table, re-insert everything from scratch
+- **Incremental Load** -- compare incoming records against what is already in the database, insert/update/skip as needed
 
-Analiza mierzy czas, liczbę operacji na bazie i zużycie RAM dla różnych rozmiarów zbiorów, długości dokumentów i strategii wykrywania zmian.
+Measures total time, DB write count, and peak RAM across dataset sizes, text variants, batch sizes, and change distributions. Also compares SQLite vs PostgreSQL side by side.
 
 ---
 
-## Instalacja
+## Requirements
 
-Wymagany Python 3.11+. Projekt nie ma obowiązkowych zewnętrznych zależności dla ścieżki SQLite — SQLite jest wbudowany w Pythona. Matplotlib jest potrzebny tylko do generowania wykresów.
+- Python 3.11+
+- Docker (optional, for PostgreSQL benchmarks)
+
+---
+
+## Installation
 
 ```bash
-pip install matplotlib
+pip install -e .
 ```
 
-Benchmark PostgreSQL wymaga dodatkowo sterownika.
+This installs all required dependencies including `matplotlib` and `psycopg[binary]`.
 
-```bash
-pip install -e ".[plots,postgres]"
-```
-
-Jeśli nie masz lokalnie zainstalowanego PostgreSQL, najprostszy setup developerski to Docker Compose z repozytorium:
+For local PostgreSQL via Docker:
 
 ```bash
 docker compose up -d postgres
 ```
 
-Domyślna konfiguracja kontenera:
+Default connection: `postgresql://postgres:postgres@localhost:5432/reload_benchmark`
 
-- host: `localhost`
-- port: `5432`
-- baza: `reload_benchmark`
-- użytkownik: `postgres`
-- hasło: `postgres`
-
-Sterownik Pythona nie instaluje samego serwera PostgreSQL. `pip install -e ".[plots,postgres]"` instaluje tylko klienta `psycopg` oraz zależności do wykresów.
+A custom DSN can be passed via `--dsn` flag or `RELOAD_BENCHMARK_POSTGRES_DSN` env variable.
 
 ---
 
-## Jak przebiega analiza
+## Running
 
-Analiza składa się z trzech niezależnych etapów:
-
-### 1. Benchmark główny
-
-Uruchamia siedem scenariuszy dla każdej kombinacji rozmiaru zbioru, wariantu tekstu i rozmiaru partii:
-
-| Scenariusz | Co testuje |
-| --- | --- |
-| Pełne przeładowanie | Baseline — usuń wszystko i wgraj od nowa |
-| Inkrementalny: bez zmian | Dane się nie zmieniły — czy inkrementalny pomija zapis? |
-| Inkrementalny: tylko nowe | Pojawiły się nowe rekordy (domyślnie 10%) |
-| Inkrementalny: nowe i zmienione | Nowe + zmienione rekordy (po 10%) |
-| Inkrementalny: duże zmiany | 50% rekordów zmodyfikowanych |
-| Inkrementalny: tylko dopisywanie | Nie sprawdza istniejących, tylko dodaje nowe — szybsze |
-| Inkrementalny: z usuwaniem | Wykrywa i usuwa rekordy usunięte ze źródła |
-
-Każdy scenariusz jest powtarzany `n_runs` razy. Wyniki trafiają do `results/benchmark_results.csv`.
-
-### 2. Analiza progu opłacalności
-
-Mierzy stosunek `czas_inkrementalny / czas_full_reload` dla wielu wartości odsetka zmienionych rekordów (od 0% do 100%). Szuka punktu, w którym inkrementalny przestaje być opłacalny. Analizę wykonuje dla każdego wariantu tekstu osobno, żeby zobaczyć jak rozmiar dokumentu wpływa na ten próg.
-
-Wyniki: `results/threshold_results.csv`.
-
-### 3. Porównanie metod detekcji
-
-Porównuje trzy sposoby wykrywania zmian:
-
-- `hash_or_timestamp` — zmiana wykryta jeśli hash SHA-256 **lub** timestamp się różni
-- `hash_only` — porównuje wyłącznie sumy kontrolne treści dokumentów
-- `timestamp_only` — porównuje wyłącznie datę modyfikacji, pomija haszowanie
-
-Wyniki: `results/detection_results.csv`.
-
-### 4. Porównanie bazy in-memory vs na systemie plikowym
-
-Porównuje algorytmy:
-- full-reload na bazie in-memory
-- full-reload na bazie opartej o system plikowy
-- inkrementalny z usuwaniem na bazie in-memory
-- inkrementalny z usuwaniem na systemie plikowym
-
-Wyniki: `results/storage_results.csv`.
-
----
-
-## Uruchamianie
-
-### Szybki sposób — skrypt `run_analysis.py`
+### Full analysis (recommended)
 
 ```bash
-# Szybki test (~2 minuty) — weryfikuje poprawność działania
+# Quick sanity check (~2 min)
 python run_analysis.py --quick
 
-# Pełny benchmark (~10-20 minut)
+# Full benchmark (~10-20 min)
 python run_analysis.py
 ```
 
-Skrypt uruchamia wszystkie trzy etapy po kolei i wyświetla postęp w konsoli. Wykresy trafiają do `results/plots/`.
+Runs all four stages in sequence and writes results to `results/`.
 
-### Zaawansowany sposób — CLI
-
-Każdy etap można uruchomić osobno z pełną kontrolą nad parametrami:
+### Individual stages via CLI
 
 ```bash
-reload-benchmark benchmark [opcje]
-reload-benchmark benchmark-postgres [opcje]
-reload-benchmark benchmark-compare [opcje]
-reload-benchmark threshold [opcje]
-reload-benchmark detection [opcje]
-reload-benchmark generate-data [opcje]
+# SQLite benchmark: 7 scenarios x sizes x variants x batch sizes
+python -m reload_benchmark.cli benchmark --sizes 10000 50000 100000 --variants short long --n-runs 3
+
+# Threshold analysis: find break-even change ratio
+python -m reload_benchmark.cli threshold --size 50000 --variants short medium long xlarge --n-runs 3
+
+# Change detection method comparison
+python -m reload_benchmark.cli detection --size 50000 --variant long --n-runs 5
+
+# PostgreSQL benchmark (requires running Postgres)
+python -m reload_benchmark.cli benchmark-postgres --sizes 10000 50000 100000 --variants short long
+
+# Direct SQLite vs PostgreSQL comparison
+python -m reload_benchmark.cli benchmark-compare --sizes 10000 50000 100000 --variants short long --n-runs 3
+
+# Reuse existing CSV results instead of re-running
+python -m reload_benchmark.cli benchmark-compare --skip-sqlite --skip-postgres
+
+# In-memory vs file-backed SQLite comparison
+python run_storage.py
 ```
 
-Lub bez instalacji paczki:
-
-```bash
-python -m reload_benchmark.cli benchmark [opcje]
-```
-
----
-
-## Wszystkie flagi CLI
-
-### `benchmark` — główny benchmark
-
-| Flaga | Domyślnie | Opis |
-| --- | --- | --- |
-| `--sizes` | `10000 50000 100000` | Rozmiary zbiorów danych (liczba rekordów) |
-| `--variants` | `short long` | Warianty tekstu: `short` (~135 B), `medium` (~1 300 B), `long` (~5 000 B), `xlarge` (~10 000 B) |
-| `--batch-sizes` | `5000 10000` | Rozmiary partii do porównania (można podać kilka) |
-| `--batch-size` | — | Pojedynczy rozmiar partii (alternatywa dla `--batch-sizes`) |
-| `--n-runs` | `3` | Liczba powtórzeń każdego scenariusza (więcej = dokładniejsze statystyki) |
-| `--new-ratio` | `0.10` | Odsetek nowych rekordów w scenariuszu „tylko nowe" |
-| `--change-ratio` | `0.10` | Odsetek zmienionych rekordów w scenariuszu „nowe i zmienione" |
-| `--high-change-ratio` | `0.50` | Odsetek zmian w scenariuszu „duże zmiany" |
-| `--delete-ratio` | `0.05` | Odsetek rekordów usuniętych ze źródła (scenariusz z usuwaniem) |
-| `--db` | `results/benchmark.sqlite` | Ścieżka do pliku bazy SQLite |
-| `--csv` | `results/benchmark_results.csv` | Ścieżka do pliku CSV z wynikami |
-| `--plots-dir` | `results/plots` | Katalog do zapisu wykresów |
-| `--no-plots` | — | Pomiń generowanie wykresów |
-
-Przykład:
-
-```bash
-reload-benchmark benchmark --sizes 50000 100000 --variants short long --n-runs 5
-```
-
----
-
-### `threshold` — próg opłacalności
-
-| Flaga | Domyślnie | Opis |
-| --- | --- | --- |
-| `--size` | `50000` | Rozmiar zbioru danych |
-| `--variants` | `short medium long xlarge` | Warianty tekstu do zbadania |
-| `--batch-size` | `5000` | Rozmiar partii |
-| `--change-ratios` | 16 punktów od 0% do 100% | Lista odsetków zmienionych rekordów do przetestowania |
-| `--n-runs` | `3` | Liczba powtórzeń każdego punktu pomiarowego |
-| `--db` | `results/threshold.sqlite` | Ścieżka do bazy SQLite |
-| `--csv` | `results/threshold_results.csv` | Ścieżka do pliku CSV |
-| `--plots-dir` | `results/plots` | Katalog wykresów |
-| `--no-plots` | — | Pomiń generowanie wykresów |
-
-Przykład:
-
-```bash
-reload-benchmark threshold --size 100000 --variants short long --change-ratios 0 0.1 0.2 0.5 1.0
-```
-
----
-
-### `benchmark-postgres` — minimalne porównanie z PostgreSQL
-
-To osobna, celowo mało inwazyjna ścieżka. Obsługuje sensowny podzbiór scenariuszy:
-
-- `full_reload`
-- `incremental_no_changes`
-- `incremental_new_only`
-- `incremental_new_and_changed`
-- `incremental_high_change`
-
-Wyniki mają ten sam układ kolumn co benchmark SQLite i dodatkowo zawierają `backend`, więc można je łatwo zestawić po połączeniu CSV.
-
-| Flaga | Domyślnie | Opis |
-| --- | --- | --- |
-| `--dsn` | `RELOAD_BENCHMARK_POSTGRES_DSN` lub lokalny fallback | DSN do PostgreSQL, np. `postgresql://user:pass@localhost:5432/dbname` |
-| `--csv` | `results/benchmark_postgres_results.csv` | Ścieżka do pliku CSV z wynikami |
-| `--sizes` | `10000 50000 100000` | Rozmiary zbiorów danych |
-| `--variants` | `short long` | Warianty tekstu |
-| `--batch-sizes` | `5000 10000` | Rozmiary partii do porównania |
-| `--batch-size` | — | Pojedynczy rozmiar partii |
-| `--n-runs` | `3` | Liczba powtórzeń |
-| `--new-ratio` | `0.10` | Odsetek nowych rekordów |
-| `--change-ratio` | `0.10` | Odsetek zmienionych rekordów |
-| `--high-change-ratio` | `0.50` | Odsetek zmian w scenariuszu „duże zmiany" |
-
-Przykład:
-
-```bash
-reload-benchmark benchmark-postgres --sizes 10000 --variants short --batch-size 5000 --n-runs 1
-```
-
-Przed pierwszym uruchomieniem lokalnego benchmarku PostgreSQL uruchom kontener:
-
-```bash
-docker compose up -d postgres
-```
-
-Benchmark używa własnego schematu `reload_benchmark` w podanej bazie i czyści tabelę `documents` między przebiegami.
-
----
-
-### `benchmark-compare` — bezpośrednie porównanie SQLite vs PostgreSQL
-
-Uruchamia oba benchmarki dla tych samych parametrów i zapisuje jawne porównanie wyników dla wspólnych scenariuszy:
-
-- `full_reload`
-- `incremental_no_changes`
-- `incremental_new_only`
-- `incremental_new_and_changed`
-- `incremental_high_change`
-
-Polecenie zapisuje trzy pliki:
-
-- surowe wyniki SQLite,
-- surowe wyniki PostgreSQL,
-- wspólny CSV porównawczy z kolumnami obok siebie, np. `sqlite_total_time_sec`, `postgres_total_time_sec`, `postgres_to_sqlite_time_ratio`.
-
-Jeśli nie użyjesz `--no-plots`, polecenie generuje też wykresy porównawcze `total_time_sec` dla wspólnych scenariuszy.
-
-| Flaga | Domyślnie | Opis |
-| --- | --- | --- |
-| `--dsn` | `RELOAD_BENCHMARK_POSTGRES_DSN` lub lokalny fallback | DSN do PostgreSQL |
-| `--sqlite-db` | `results/benchmark_compare.sqlite` | Plik bazy SQLite używany przez benchmark |
-| `--sqlite-csv` | `results/benchmark_sqlite_results.csv` | Surowe wyniki SQLite |
-| `--postgres-csv` | `results/benchmark_postgres_results.csv` | Surowe wyniki PostgreSQL |
-| `--compare-csv` | `results/benchmark_backend_comparison.csv` | Bezpośrednie porównanie SQLite vs PostgreSQL |
-| `--plots-dir` | `results/plots` | Katalog wykresów porównawczych |
-| `--sizes` | `10000 50000 100000` | Rozmiary zbiorów danych |
-| `--variants` | `short long` | Warianty tekstu |
-| `--batch-sizes` | `5000 10000` | Rozmiary partii do porównania |
-| `--batch-size` | — | Pojedynczy rozmiar partii |
-| `--n-runs` | `3` | Liczba powtórzeń |
-| `--new-ratio` | `0.10` | Odsetek nowych rekordów |
-| `--change-ratio` | `0.10` | Odsetek zmienionych rekordów |
-| `--high-change-ratio` | `0.50` | Odsetek zmian w scenariuszu „duże zmiany" |
-| `--no-plots` | — | Pomiń generowanie wykresów porównawczych |
-
-Przykład:
-
-```bash
-reload-benchmark benchmark-compare --sizes 10000 --variants short --batch-size 5000 --n-runs 1
-```
-
-Przed pierwszym uruchomieniem lokalnego porównania backendów uruchom kontener:
-
-```bash
-docker compose up -d postgres
-```
-
----
-
-### `detection` — porównanie metod detekcji
-
-| Flaga | Domyślnie | Opis |
-| --- | --- | --- |
-| `--size` | `50000` | Rozmiar zbioru danych |
-| `--variant` | `long` | Wariant tekstu (długi tekst najlepiej uwypukla koszt haszowania) |
-| `--batch-size` | `5000` | Rozmiar partii |
-| `--change-ratio` | `0.10` | Odsetek zmienionych rekordów |
-| `--detection-methods` | `hash_or_timestamp hash_only timestamp_only` | Metody detekcji do porównania |
-| `--n-runs` | `5` | Liczba powtórzeń |
-| `--db` | `results/detection.sqlite` | Ścieżka do bazy SQLite |
-| `--csv` | `results/detection_results.csv` | Ścieżka do pliku CSV |
-| `--plots-dir` | `results/plots` | Katalog wykresów |
-| `--no-plots` | — | Pomiń generowanie wykresów |
-
-Przykład:
-
-```bash
-reload-benchmark detection --size 100000 --variant xlarge --n-runs 10
-```
-
----
-
-### `generate-data` — zapis dokumentów na dysk
-
-Generuje przykładowe dokumenty tekstowe do folderu na dysku (do inspekcji lub debugowania). Benchmark nie wymaga tego kroku — dane generuje w pamięci.
-
-| Flaga | Domyślnie | Opis |
-| --- | --- | --- |
-| `--output-dir` | `data/generated` | Katalog docelowy |
-| `--sizes` | `1000` | Rozmiary zbiorów do wygenerowania |
-| `--variants` | `short long` | Warianty tekstu |
-
----
-
-### `generate_plots.py` — regeneracja wykresów z CSV
-
-Jeśli masz już pliki CSV z wynikami, możesz wygenerować wykresy bez ponownego uruchamiania benchmarku:
+### Regenerate plots from existing CSV files
 
 ```bash
 python generate_plots.py
 ```
 
-Skrypt czyta `results/benchmark_results.csv`, `results/threshold_results.csv`, `results/detection_results.csv` i `results/benchmark_backend_comparison.csv`. Pomija brakujące pliki.
+Reads all CSV files in `results/` and regenerates all PNG plots without re-running benchmarks.
 
 ---
 
-## Struktura projektu
+## Analysis stages
 
-```text
-├── docker-compose.yml       # opcjonalny lokalny PostgreSQL do benchmarków porównawczych
-├── run_analysis.py          # główny skrypt uruchamiający całą analizę
-├── generate_plots.py        # regeneracja wykresów z istniejących CSV
-├── src/
-│   └── reload_benchmark/
-│       ├── benchmark.py     # logika trzech etapów analizy
-│       ├── backend_comparison.py # bezpośrednie porównanie SQLite vs PostgreSQL
-│       ├── postgres_benchmark.py # osobny, minimalny benchmark PostgreSQL
-│       ├── loaders.py       # implementacje strategii ładowania
-│       ├── data_generator.py# generowanie danych testowych w pamięci
-│       ├── database.py      # połączenie SQLite, schemat, operacje
-│       ├── plotting.py      # wszystkie wykresy (matplotlib)
-│       └── cli.py           # interfejs wiersza poleceń
-├── tests/
-│   └── test_loaders.py      # testy jednostkowe
-├── results/
-│   ├── benchmark_results.csv
-│   ├── threshold_results.csv
-│   ├── detection_results.csv
-│   └── plots/               # wygenerowane wykresy PNG
-└── PLOTS.md                 # opis wszystkich wykresów
+### 1. Main benchmark
+
+Seven load scenarios run for each combination of dataset size, text variant, and batch size:
+
+| Scenario | Description |
+| --- | --- |
+| `full_reload` | DELETE all, INSERT all -- baseline |
+| `incremental_no_changes` | 0% changes -- does incremental skip all writes? |
+| `incremental_new_only` | 10% new records appended |
+| `incremental_new_and_changed` | 10% new + 10% modified |
+| `incremental_high_change` | 50% records modified |
+| `incremental_append_only` | Inserts new records only, skips hash comparison |
+| `incremental_with_deletes` | Detects and removes records absent from source |
+
+Results: `results/benchmark_sqlite_results.csv`
+
+### 2. Threshold analysis
+
+Sweeps `change_ratio` from 0% to 100% in 16 steps to find the crossover point where incremental load stops being faster than full reload. Runs separately for each text variant to show how document size shifts the threshold.
+
+Results: `results/threshold_results.csv`
+
+### 3. Change detection comparison
+
+Compares three strategies for detecting whether a record has changed:
+
+- `hash_or_timestamp` -- changed if SHA-256 hash OR timestamp differs
+- `hash_only` -- compare content hashes only
+- `timestamp_only` -- compare timestamps only, skip hashing entirely
+
+Results: `results/detection_results.csv`
+
+### 4. In-memory vs file-backed SQLite
+
+Runs full reload and incremental-with-deletes on both an in-memory SQLite database and a file-backed one (WAL mode, `synchronous=NORMAL`). Measures the filesystem overhead.
+
+Results: `results/storage_results.csv`
+
+### 5. SQLite vs PostgreSQL comparison
+
+Runs the five common scenarios on both backends with identical parameters and produces a joined comparison CSV with columns like `sqlite_total_time_sec`, `postgres_total_time_sec`, `postgres_to_sqlite_time_ratio`.
+
+Results: `results/benchmark_backend_comparison.csv`, plots: `results/plots/backend_total_time_*.png`
+
+---
+
+## CLI flags
+
+### `benchmark`
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--sizes` | `10000 50000 100000` | Dataset sizes (number of records) |
+| `--variants` | `short long` | Text variants: `short` (~135 B), `medium` (~1300 B), `long` (~5000 B), `xlarge` (~10000 B) |
+| `--batch-sizes` | `5000 10000` | Batch sizes to compare (multiple allowed) |
+| `--batch-size` | -- | Single batch size (alternative to `--batch-sizes`) |
+| `--n-runs` | `3` | Repetitions per scenario |
+| `--new-ratio` | `0.10` | Fraction of new records |
+| `--change-ratio` | `0.10` | Fraction of modified records |
+| `--high-change-ratio` | `0.50` | Fraction modified in high-change scenario |
+| `--delete-ratio` | `0.05` | Fraction deleted from source (with-deletes scenario) |
+| `--db` | `results/benchmark.sqlite` | SQLite results database path |
+| `--csv` | `results/benchmark_results.csv` | CSV output path |
+| `--plots-dir` | `results/plots` | Plot output directory |
+| `--no-plots` | -- | Skip plot generation |
+
+### `threshold`
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--size` | `50000` | Dataset size |
+| `--variants` | `short medium long xlarge` | Text variants to test |
+| `--batch-size` | `5000` | Batch size |
+| `--change-ratios` | 16 points 0%..100% | Change ratio values to sweep |
+| `--n-runs` | `3` | Repetitions per measurement point |
+
+### `detection`
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--size` | `50000` | Dataset size |
+| `--variant` | `long` | Text variant |
+| `--batch-size` | `5000` | Batch size |
+| `--change-ratio` | `0.10` | Fraction of modified records |
+| `--n-runs` | `5` | Repetitions per method |
+
+### `benchmark-compare`
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dsn` | env or local default | PostgreSQL connection string |
+| `--sqlite-csv` | `results/benchmark_sqlite_results.csv` | SQLite results CSV |
+| `--postgres-csv` | `results/benchmark_postgres_results.csv` | PostgreSQL results CSV |
+| `--compare-csv` | `results/benchmark_backend_comparison.csv` | Joined comparison CSV |
+| `--skip-sqlite` | -- | Skip SQLite benchmark, load from `--sqlite-csv` |
+| `--skip-postgres` | -- | Skip PostgreSQL benchmark, load from `--postgres-csv` |
+| `--no-plots` | -- | Skip plot generation |
+
+All size/variant/batch/n-runs flags are the same as `benchmark`.
+
+---
+
+## Tests
+
+```bash
+python -m pytest tests/
+
+# Single test
+python -m pytest tests/test_loaders.py::LoaderTests::test_full_reload_matches_source_count
+
+# Without pytest
+python -m unittest tests/test_loaders.py
 ```
 
-## Wyniki
+Tests use in-memory SQLite via `tempfile.TemporaryDirectory` -- no external dependencies required.
 
-Wykresy PNG generowane są do `results/plots/`. Ich opis — co każdy pokazuje i jak go interpretować — znajdziesz w [PLOTS.md](PLOTS.md).
+---
+
+## Project structure
+
+```text
+.
++-- docker-compose.yml          # local PostgreSQL for benchmarks
++-- run_analysis.py             # runs all four analysis stages
++-- run_storage.py              # standalone in-memory vs file benchmark
++-- generate_plots.py           # regenerate plots from existing CSV files
++-- src/
+|   +-- reload_benchmark/
+|       +-- data_generator.py   # synthetic document generation (in-memory)
+|       +-- loaders.py          # all loading strategies, returns LoadResult
+|       +-- database.py         # SQLite connection factory, schema, fetch helpers
+|       +-- benchmark.py        # orchestration, config dataclasses, run_* functions
+|       +-- backend_comparison.py # SQLite vs PostgreSQL side-by-side runner
+|       +-- postgres_benchmark.py # PostgreSQL benchmark using psycopg v3
+|       +-- plotting.py         # all matplotlib charts
+|       +-- cli.py              # argparse CLI entry point
++-- tests/
+|   +-- test_loaders.py
++-- results/
+    +-- benchmark_sqlite_results.csv
+    +-- benchmark_postgres_results.csv
+    +-- benchmark_backend_comparison.csv
+    +-- threshold_results.csv
+    +-- detection_results.csv
+    +-- storage_results.csv
+    +-- plots/                  # 38 PNG charts
+```
+
+## Output files
+
+| File | Generated by | Contents |
+| --- | --- | --- |
+| `benchmark_sqlite_results.csv` | `benchmark-compare` or `benchmark` | Per-run metrics for all SQLite scenarios |
+| `benchmark_postgres_results.csv` | `benchmark-compare` or `benchmark-postgres` | Per-run metrics for PostgreSQL scenarios |
+| `benchmark_backend_comparison.csv` | `benchmark-compare` | Joined SQLite vs PostgreSQL with ratios |
+| `threshold_results.csv` | `threshold` | Full/incremental time at each change ratio |
+| `detection_results.csv` | `detection` | Per-method timing for change detection |
+| `storage_results.csv` | `run_storage.py` | In-memory vs file-backed SQLite timing |
+| `results/plots/*.png` | Any run with plots enabled | 38 charts total |

@@ -110,6 +110,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Liczba powtórzeń każdego scenariusza",
     )
     compare.add_argument("--no-plots", action="store_true")
+    compare.add_argument(
+        "--skip-sqlite", action="store_true",
+        help="Pomiń benchmark SQLite i wczytaj wyniki z --sqlite-csv",
+    )
+    compare.add_argument(
+        "--skip-postgres", action="store_true",
+        help="Pomiń benchmark PostgreSQL i wczytaj wyniki z --postgres-csv",
+    )
 
     # ------------------------------------------------------------------
     # threshold – analiza progu opłacalności
@@ -285,6 +293,8 @@ def main(argv: List[str] | None = None) -> int:
             high_change_ratio=args.high_change_ratio,
             n_runs=args.n_runs,
             create_plots=not args.no_plots,
+            skip_sqlite=args.skip_sqlite,
+            skip_postgres=args.skip_postgres,
         )
         rows = run_backend_comparison(config)
         print(f"Zakończono {len(rows)} bezpośrednich porównań SQLite vs PostgreSQL")

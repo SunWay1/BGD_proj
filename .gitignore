@@ -5,3 +5,4 @@ __pycache__/
 *.db
 data/generated/
 .pytest_cache/
+src/reload_benchmark.egg-info

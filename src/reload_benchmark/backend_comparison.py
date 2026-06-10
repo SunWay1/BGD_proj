@@ -36,10 +36,37 @@ class BackendComparisonConfig:
     high_change_ratio: float = 0.50
     n_runs: int = 1
     create_plots: bool = True
+    skip_sqlite: bool = False
+    skip_postgres: bool = False
 
 
 def _run_at() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _load_benchmark_csv(path: Path) -> List[Dict[str, object]]:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Brak pliku CSV: {path}\n"
+            "Uruchom najpierw benchmark bez flagi --skip, żeby wygenerować wyniki."
+        )
+    rows: List[Dict[str, object]] = []
+    with path.open(encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            converted: Dict[str, object] = {}
+            for key, val in row.items():
+                if val == "" or val is None:
+                    converted[key] = None
+                    continue
+                try:
+                    converted[key] = int(val)
+                except ValueError:
+                    try:
+                        converted[key] = float(val)
+                    except ValueError:
+                        converted[key] = val
+            rows.append(converted)
+    return rows
 
 
 def _write_csv(path: Path, rows: Iterable[Dict[str, object]]) -> None:
@@ -158,37 +185,45 @@ def build_comparison_rows(
 
 
 def run_backend_comparison(config: BackendComparisonConfig) -> List[Dict[str, object]]:
-    _progress("[compare] Uruchamianie benchmarku SQLite...")
-    sqlite_rows = run_benchmark(
-        BenchmarkConfig(
-            db_path=config.sqlite_db_path,
-            results_csv=config.sqlite_results_csv,
-            plots_dir=config.plots_dir,
-            sizes=config.sizes,
-            variants=config.variants,
-            batch_sizes=config.batch_sizes,
-            new_ratio=config.new_ratio,
-            change_ratio=config.change_ratio,
-            high_change_ratio=config.high_change_ratio,
-            n_runs=config.n_runs,
-            create_plots=False,
+    if config.skip_sqlite:
+        _progress(f"[compare] Wczytywanie wyników SQLite z {config.sqlite_results_csv}...")
+        sqlite_rows = _load_benchmark_csv(config.sqlite_results_csv)
+    else:
+        _progress("[compare] Uruchamianie benchmarku SQLite...")
+        sqlite_rows = run_benchmark(
+            BenchmarkConfig(
+                db_path=config.sqlite_db_path,
+                results_csv=config.sqlite_results_csv,
+                plots_dir=config.plots_dir,
+                sizes=config.sizes,
+                variants=config.variants,
+                batch_sizes=config.batch_sizes,
+                new_ratio=config.new_ratio,
+                change_ratio=config.change_ratio,
+                high_change_ratio=config.high_change_ratio,
+                n_runs=config.n_runs,
+                create_plots=False,
+            )
         )
-    )
 
-    _progress("[compare] Uruchamianie benchmarku PostgreSQL...")
-    postgres_rows = run_postgres_benchmark(
-        PostgresBenchmarkConfig(
-            dsn=config.postgres_dsn,
-            results_csv=config.postgres_results_csv,
-            sizes=config.sizes,
-            variants=config.variants,
-            batch_sizes=config.batch_sizes,
-            new_ratio=config.new_ratio,
-            change_ratio=config.change_ratio,
-            high_change_ratio=config.high_change_ratio,
-            n_runs=config.n_runs,
+    if config.skip_postgres:
+        _progress(f"[compare] Wczytywanie wyników PostgreSQL z {config.postgres_results_csv}...")
+        postgres_rows = _load_benchmark_csv(config.postgres_results_csv)
+    else:
+        _progress("[compare] Uruchamianie benchmarku PostgreSQL...")
+        postgres_rows = run_postgres_benchmark(
+            PostgresBenchmarkConfig(
+                dsn=config.postgres_dsn,
+                results_csv=config.postgres_results_csv,
+                sizes=config.sizes,
+                variants=config.variants,
+                batch_sizes=config.batch_sizes,
+                new_ratio=config.new_ratio,
+                change_ratio=config.change_ratio,
+                high_change_ratio=config.high_change_ratio,
+                n_runs=config.n_runs,
+            )
         )
-    )
 
     _progress("[compare] Budowanie bezpośredniego porównania SQLite vs PostgreSQL...")
     rows = build_comparison_rows(sqlite_rows, postgres_rows)

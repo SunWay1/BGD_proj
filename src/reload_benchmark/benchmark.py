@@ -64,18 +64,6 @@ class DetectionConfig:
     create_plots: bool = True
 
 
-SCENARIOS = (
-    "full_reload",
-    "incremental_no_changes",
-    "incremental_new_only",
-    "incremental_new_and_changed",
-    "incremental_high_change",
-    "incremental_append_only",
-    "incremental_with_deletes",
-    "full_reload_file",
-    "incremental_with_deletes_file",
-)
-
 
 def _run_at() -> str:
     return datetime.now(timezone.utc).isoformat()

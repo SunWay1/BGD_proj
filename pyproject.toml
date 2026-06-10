@@ -1,4 +1,4 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
@@ -8,11 +8,10 @@ version = "0.1.0"
 description = "Full reload vs incremental load benchmark using Python and SQLite"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
-
-[project.optional-dependencies]
-plots = ["matplotlib>=3.8"]
-postgres = ["psycopg[binary]>=3.2"]
+dependencies = [
+    "matplotlib>=3.8",
+    "psycopg[binary]>=3.2",
+]
 
 [project.scripts]
 reload-benchmark = "reload_benchmark.cli:main"
